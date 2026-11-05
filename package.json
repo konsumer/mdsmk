@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {
+    "fmt": "npx -y prettier -w README.md fmhub.json package.json .github"
+  }
+}
