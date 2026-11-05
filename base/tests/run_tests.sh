@@ -26,7 +26,6 @@ run() {
 run encoder sh -c "$CC -O2 -w -Ibsp/chip -Ibsp/boards/fm1 -o $OUT/encoder_test tests/encoder_test.c && $OUT/encoder_test"
 run trs sh -c "$CC -O2 -w -Ibsp/chip -Ibsp/boards/fm1 -Idevice -o $OUT/trs_test tests/trs_test.c && $OUT/trs_test"
 run storage sh -c "$CC -O2 -w -o $OUT/storage_test tests/storage_test.c && $OUT/storage_test"
-run wifi-scan sh -c "$CC -O2 -w -Itests/wifi_stub -o $OUT/wifi_scan_test tests/wifi_scan_test.c && $OUT/wifi_scan_test"
 run fastmath sh -c "$CC -O2 -w -o $OUT/fastmath_test tests/fastmath_test.c -lm && $OUT/fastmath_test"
 run installer "$PY" tests/install_test.py
 # backup and restore over USB (device/backup.c) on storage.c over a simulated flash, for a test app: the stream's

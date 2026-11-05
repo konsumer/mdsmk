@@ -317,8 +317,10 @@ void plat_sysex_send(const uint8_t *frame, uint32_t n) { ota_wire_send(frame, n)
 /* the data area and its two more windows (plat.h): read through the unencrypted XIP window (main_fm1.c
  * fl_plain_window_init, from 0x93000 up); erased and written by felucca-bsp's RAM driver (FL_RANGE_OK: the store, its
  * FL_XDATA windows) */
+#if !BOARD_SMK37
 _Static_assert(FL_XDATA0_LO == PLAT_XDATA0_LO && FL_XDATA0_HI == PLAT_XDATA0_HI && FL_XDATA1_HI == PLAT_XDATA1_HI &&
                FL_AUTO_LO == PLAT_XDATA1_LO && FL_AUTO_HI == FL_XDATA1_LO, "plat.h's windows are felucca-bsp's");
+#endif
 const uint8_t *plat_data(uint32_t off)
 {
     return flash_ok && PLAT_DATA_OK(off, 1u) ? (const uint8_t *)FL_XIP(off) : 0;

@@ -51,10 +51,21 @@ static uint32_t st_crc32(const void *p, uint32_t n)   /* zlib CRC-32, 4 bits per
 /* The M-Vave SMK-37 (boards/smk37/fm1_flash_map.h): the objects in the stock VM, 0x9D000..0xAEFFF, by number, A/B
  * neighbours (APP_STORE_MAP's FM-1 offsets mean nothing there); never near BTIF / USRTRIM (0xC0000..0xC1FFF) or
  * key_mac (0xFF000). */
-_Static_assert(FL_DATA_LO + 2u * OBJ_NOBJ * ST_SECTOR <= FL_OBJ_HI, "SMK-37 store: more objects than 0x9D000..0xAEFFF holds");
+#define ST_VM_OBJS ((FL_OBJ_HI - FL_DATA_LO) / (2u * ST_SECTOR))   /* 9 objects fit the VM */
+/* An app with more objects than that: the rest go to the start of USRFLASH (FL_BIG), A/B neighbours as well, up to
+ * ST_BIG_HI; such an app keeps its own plat_data above ST_BIG_HI. The stock marker goes before their first erase. */
+#if OBJ_NOBJ > ST_VM_OBJS
+#define ST_BIG_HI (FL_BIG_LO + 2u * (OBJ_NOBJ - ST_VM_OBJS) * ST_SECTOR)
+_Static_assert(ST_BIG_HI <= FL_BIG_HI, "SMK-37 store: more objects than the VM and USRFLASH hold");
+#else
+#define ST_BIG_HI FL_BIG_LO
+#endif
 static uint32_t st_sector(uint32_t obj, uint32_t copy)  /* flash offset of copy A (0) / B (1) */
 {
-    return FL_DATA_LO + ((obj % OBJ_NOBJ) * 2u + (copy & 1u)) * ST_SECTOR;
+    obj %= OBJ_NOBJ;
+    if (obj < ST_VM_OBJS)
+        return FL_DATA_LO + (obj * 2u + (copy & 1u)) * ST_SECTOR;
+    return FL_BIG_LO + ((obj - ST_VM_OBJS) * 2u + (copy & 1u)) * ST_SECTOR;
 }
 
 /* The owner of the store. The store is the stock firmware's VM, so after an install it may hold the stock firmware's
@@ -131,6 +142,14 @@ static void st_owner_check(void)
     for (s = FL_DATA_LO; s < FL_OBJ_HI; s += ST_SECTOR) {   /* not ours (or untagged data): clear it */
         ST_IDLE();
         st_erase(s);
+    }
+    for (s = FL_BIG_LO; s < ST_BIG_HI; s += ST_SECTOR) {    /* the objects in USRFLASH: another firmware's store records */
+        uint32_t m;
+        if (!st_read(s, &m, 4) && m == ST_MAGIC) {
+            ST_IDLE();
+            st_stock_release();
+            st_erase(s);
+        }
     }
     st_owner_cleared = 1;
     ST_IDLE();
@@ -237,6 +256,10 @@ static int st_save(uint32_t obj, const void *src, uint32_t len)
     base = st_sector(obj, cur == 0 ? 1u : 0u);       /* write the other copy */
     for (off = 0; off < len; off++)
         st_buf[off] = ((const uint8_t *)src)[off];    /* the driver wants RAM sources */
+#if BOARD_SMK37
+    if (base >= FL_BIG_LO)
+        st_stock_release();                           /* an object in USRFLASH: the stock marker goes first */
+#endif
     if ((rc = st_erase(base)) != 0)
         return rc;
     for (off = 0; off < len; off += 256u) {

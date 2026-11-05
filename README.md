@@ -4,7 +4,7 @@
 
 ![Mutable Dreams on the FM-1](docs/screen.png)
 
-This is a fork. The instrument, its sounds and its manual are Kid Bunka's: see the [original repository](https://github.com/kidbee85-beep/mutable-dreams) for what it does and how to play it. Its browser editor and installer work with these builds too. This repository only keeps the source, builds every release in GitHub Actions, and adds builds for the SMK-37.
+This is a fork. The instrument, its sounds and its manual are Kid Bunka's: see the [original repository](https://github.com/kidbee85-beep/mutable-dreams) for what it does and how to play it. Its browser editor and installer work with these builds too. This repository only keeps the source, builds every release in GitHub Actions, and adds builds for the SMK-37: see [SMK37.md](SMK37.md) for its controls.
 
 ## Install
 
@@ -21,7 +21,7 @@ docker run --rm --platform linux/amd64 -u "$(id -u):$(id -g)" -v "$PWD:/work" ko
   sh -c 'pip3 install -q --user --break-system-packages pillow && sh tools/build_device.sh'
 ```
 
-The package lands in `app/build/`. `VERSION=1.4.0-smk1` sets the release version (the device ID stays `FM-1_710` plus the version's digits). See [BUILDING.md](BUILDING.md) for the native and browser builds.
+The packages land in `app/build/` (the FM-1's) and `app/build/smk37*/` (the SMK-37 Pro, Elite and MKE-P37's); `BOARD=fm1` or `BOARD=smk37 MODEL=pro|elite|mke` builds just one. `VERSION=1.4.0-smk1` sets the release version (the device ID stays `FM-1_710` plus the version's digits). See [BUILDING.md](BUILDING.md) for the native and browser builds.
 
 Pushing a `v*` tag builds a release, attaches its packages and updates the [mutant.cloud](https://mutant.cloud) listing.
 

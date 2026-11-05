@@ -503,8 +503,14 @@ void plat_midi_out(uint32_t pkt) { plat_midi_send(pkt, TO_USB); }
 void plat_log(const char *line) { ble_say(line); }
 /* the data area and its two more windows (plat.h): a simulated flash from the first window to the last (the gap
  * between, the update's staging, refused as on the device), erased at the start, kept across a simulated reboot */
+#if BOARD_SMK37
+#define DATA_BASE PLAT_DATA_LO                  /* the SMK-37: the data area alone */
+#define DATA_TOP PLAT_DATA_HI
+#else
 #define DATA_BASE PLAT_XDATA0_LO
-static uint8_t data_area[PLAT_XDATA1_HI - DATA_BASE];
+#define DATA_TOP PLAT_XDATA1_HI
+#endif
+static uint8_t data_area[DATA_TOP - DATA_BASE];
 static uint8_t data_ready;
 static void data_init(void)
 {
