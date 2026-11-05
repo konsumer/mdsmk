@@ -1,3 +1,0 @@
-All device tests in this folder used 427a34ee (full hash in report).
-Private .mddb/raw/live patch exports deliberately excluded. Bench scripts need
-a fresh local private baseline; adapt paths before use. No firmware code changed.

@@ -1,0 +1,46 @@
+# Builds the firmware on every push and pull request (the packages are kept as a "firmware" artifact).
+# A v* tag (v1.4.0-smk1) also makes a release with the packages attached and updates the mutant.cloud listing.
+name: build
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: konsumer/foma-toolchain
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip3 install -q --break-system-packages pillow
+      - name: Build
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) export VERSION="${GITHUB_REF_NAME#v}" ;;
+          esac
+          sh tools/build_device.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: app/build/*.fwsc
+          if-no-files-found: error
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: app/build/*.fwsc
+          fail_on_unmatched_files: true
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: konsumer/mutantcloud@main
+        with:
+          name: Mutable Dreams (mdsmk)
+          devices: fm1
