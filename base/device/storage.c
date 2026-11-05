@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0
  * Copyright (C) 2026 Charles Vestal
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
- * Changed for X0X and fm1-base: the object map is the app's (see below). */
+ * Changed for X0X and fm1-base: the object map is the app's (see below).
+ * The M-Vave SMK-37's map, store owner and stock mapping: Copyright (C) 2026 M. Geisler (genkigenki/makkuro) */
 /* Persistent storage on the SPI NOR.
  *
  * Every object has an A/B sector pair. A save goes to the copy that is not
@@ -46,11 +47,122 @@ static uint32_t st_crc32(const void *p, uint32_t n)   /* zlib CRC-32, 4 bits per
     return ~c;
 }
 
+#if BOARD_SMK37
+/* The M-Vave SMK-37 (boards/smk37/fm1_flash_map.h): the objects in the stock VM, 0x9D000..0xAEFFF, by number, A/B
+ * neighbours (APP_STORE_MAP's FM-1 offsets mean nothing there); never near BTIF / USRTRIM (0xC0000..0xC1FFF) or
+ * key_mac (0xFF000). */
+#define ST_VM_OBJS ((FL_OBJ_HI - FL_DATA_LO) / (2u * ST_SECTOR))   /* 9 objects fit the VM */
+/* An app with more objects than that: the rest go to the start of USRFLASH (FL_BIG), A/B neighbours as well, up to
+ * ST_BIG_HI; such an app keeps its own plat_data above ST_BIG_HI. The stock marker goes before their first erase. */
+#if OBJ_NOBJ > ST_VM_OBJS
+#define ST_BIG_HI (FL_BIG_LO + 2u * (OBJ_NOBJ - ST_VM_OBJS) * ST_SECTOR)
+_Static_assert(ST_BIG_HI <= FL_BIG_HI, "SMK-37 store: more objects than the VM and USRFLASH hold");
+#else
+#define ST_BIG_HI FL_BIG_LO
+#endif
+static uint32_t st_sector(uint32_t obj, uint32_t copy)  /* flash offset of copy A (0) / B (1) */
+{
+    obj %= OBJ_NOBJ;
+    if (obj < ST_VM_OBJS)
+        return FL_DATA_LO + (obj * 2u + (copy & 1u)) * ST_SECTOR;
+    return FL_BIG_LO + ((obj - ST_VM_OBJS) * 2u + (copy & 1u)) * ST_SECTOR;
+}
+
+/* The owner of the store. The store is the stock firmware's VM, so after an install it may hold the stock firmware's
+ * or another firmware's data, which must never be read as this one's. The sector after the objects (0xAF000) holds the
+ * tag "SMK37DATAFM1B:" + the app's name (FM1B_DATA_FAMILY, default APP_NAME). Tagged: load as ever. Anything else:
+ * clear the objects (0x9D000..0xAEFFF), then write the tag. The app's big data (plat_data, USRFLASH) checks itself.
+ * Calibration, BT pairing and key_mac are outside: never touched. ST_IDLE() runs between the erases. */
+#ifndef FM1B_DATA_FAMILY
+#define FM1B_DATA_FAMILY APP_NAME
+#endif
+#ifndef ST_IDLE
+#define ST_IDLE() ((void)0)
+#endif
+#define ST_OWNER_OFF FL_OBJ_HI
+_Static_assert(sizeof FM1B_DATA_FAMILY >= 2u && sizeof FM1B_DATA_FAMILY <= 32u - 14u, "FM1B_DATA_FAMILY: 1..17 characters");
+/* The stock firmware's mapping in USRFLASH (its global settings at 0xC2000, magic A3 3A; 8 presets from 0xC3000 every
+ * 0x5000; the end marker "usrdata\0" at 0xEAFF8): the stock firmware trusts the area while the marker is there and
+ * never rebuilds it. So an intact stock mapping is kept until the app first writes there, and the marker is released
+ * (its sector erased: the stock firmware rebuilds its factory mapping at its next start) before the first erase in
+ * USRFLASH (plat_data_erase) and at boot when it stands over anything else (st_owner_check). */
+#define ST_STOCKTAG_OFF 0xEAFF8u
+_Static_assert(ST_STOCKTAG_OFF + 8u == FL_STOCKTAG_HI, "SMK-37: the stock marker's place");
+static int st_stock_tagged(void)
+{
+    static const uint8_t TAG[8] = {'u', 's', 'r', 'd', 'a', 't', 'a', 0};
+    uint8_t t[8];
+    uint32_t i;
+    if (st_read(ST_STOCKTAG_OFF, t, 8))
+        return 0;
+    for (i = 0; i < 8u; i++)
+        if (t[i] != TAG[i])
+            return 0;
+    return 1;
+}
+static int st_stock_intact(void)                /* the marker over the stock layout */
+{
+    uint8_t b[8];
+    uint32_t n, k, i, ff;
+    if (!st_stock_tagged() || st_read(FL_BIG_LO, b, 2) || b[0] != 0xA3u || b[1] != 0x3Au)
+        return 0;
+    for (n = 0; n < 8u; n++)                    /* each preset: its head written, its last two sectors erased */
+        for (k = 0; k < 3u; k++) {
+            if (st_read(FL_BIG_LO + 0x1000u + n * 0x5000u + (k ? 0x2000u + k * 0x1000u : 0u), b, 8))
+                return 0;
+            for (ff = 1, i = 0; i < 8u; i++)
+                ff &= b[i] == 0xFFu;
+            if (ff != (k != 0u))
+                return 0;
+        }
+    return 1;
+}
+static int st_erase_stocktag(void);             /* (unity.c: the one erase outside the app's windows) */
+static void st_stock_release(void)              /* erase the marker's sector, once: later calls find no marker */
+{
+    if (st_stock_tagged())
+        st_erase_stocktag();
+}
+static uint8_t st_owner_cleared;                /* (the app may say so) */
+static void st_owner_check(void)
+{
+    static const char FAM[] = FM1B_DATA_FAMILY;
+    uint8_t tag[32], want[32];
+    uint32_t i, ours = 1, s;
+    for (i = 0; i < 32u; i++)
+        want[i] = i < 14u ? (uint8_t)"SMK37DATAFM1B:"[i] : i - 14u < sizeof FAM - 1u ? (uint8_t)FAM[i - 14u] : 0u;
+    if (!st_stock_intact())
+        st_stock_release();                     /* the marker over anything but the stock mapping: let it rebuild */
+    if (st_read(ST_OWNER_OFF, tag, 32))
+        return;
+    for (i = 0; i < 32u; i++)
+        ours &= tag[i] == want[i];
+    if (ours)
+        return;
+    for (s = FL_DATA_LO; s < FL_OBJ_HI; s += ST_SECTOR) {   /* not ours (or untagged data): clear it */
+        ST_IDLE();
+        st_erase(s);
+    }
+    for (s = FL_BIG_LO; s < ST_BIG_HI; s += ST_SECTOR) {    /* the objects in USRFLASH: another firmware's store records */
+        uint32_t m;
+        if (!st_read(s, &m, 4) && m == ST_MAGIC) {
+            ST_IDLE();
+            st_stock_release();
+            st_erase(s);
+        }
+    }
+    st_owner_cleared = 1;
+    ST_IDLE();
+    st_erase(ST_OWNER_OFF);
+    st_prog(ST_OWNER_OFF, want, 32);
+}
+#else
 static uint32_t st_sector(uint32_t obj, uint32_t copy)  /* flash offset of copy A (0) / B (1) */
 {
     static const uint32_t map[OBJ_NOBJ] = APP_STORE_MAP;
     return map[obj] + copy * ST_SECTOR;
 }
+#endif
 
 static uint8_t st_buf[ST_PAYLOAD_MAX] __attribute__((aligned(4)));
 
@@ -144,6 +256,10 @@ static int st_save(uint32_t obj, const void *src, uint32_t len)
     base = st_sector(obj, cur == 0 ? 1u : 0u);       /* write the other copy */
     for (off = 0; off < len; off++)
         st_buf[off] = ((const uint8_t *)src)[off];    /* the driver wants RAM sources */
+#if BOARD_SMK37
+    if (base >= FL_BIG_LO)
+        st_stock_release();                           /* an object in USRFLASH: the stock marker goes first */
+#endif
     if ((rc = st_erase(base)) != 0)
         return rc;
     for (off = 0; off < len; off += 256u) {

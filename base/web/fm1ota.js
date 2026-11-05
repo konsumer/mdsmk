@@ -150,7 +150,7 @@ export class Updater {
   // every in/out pair with the same port name that answers the handshake
   async find(filter) {
     // Refuse ambiguity before probing: installing is allowed for one connected FM-1 only.
-    const inputs = [...this.access.inputs.values()].filter(p => p.state !== "disconnected" && /fm-?1|felucca|ota|composite|sinco|usb-midi/i.test(p.name || ""));
+    const inputs = [...this.access.inputs.values()].filter(p => p.state !== "disconnected" && /fm-?1|smk|elite|mke-p37|starry|felucca|ota|composite|sinco|usb-midi/i.test(p.name || ""));
     const outs = [...this.access.outputs.values()].filter(p => p.state !== "disconnected");
     if (inputs.length > 1) throw fail("ambiguous", "More than one FM-1 is connected. Disconnect the other FM-1 before installing.");
     for (const input of inputs) {
@@ -265,10 +265,16 @@ export class Updater {
     return s2;
   }
 
-  // resume: the device is already in update mode (loader) -> true when the write finished
-  async resume(image, onStep) {
+  // resume: the device is already in update mode (loader) -> true when the write finished. product (the package's
+  // identity): the loader's model must be the package's ("ota-" aside), as install() checks the running firmware: an
+  // SMK-37's loader never gets an FM-1 package, nor another model's
+  async resume(image, onStep, product) {
     const ota = await this.find(IS_OTA);
     if (!ota) return false;
+    if (product && ota.id.model.replace(/^ota-/i, "") !== product.split("_")[0]) {
+      ota.link.close();
+      throw fail("model", `the device is in the update mode of ${ota.id.text}, the package is for ${product}`, ota.id.text);
+    }
     return (await this.write(ota, image, onStep || (() => {}))).finished;
   }
 }

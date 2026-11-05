@@ -1,5 +1,6 @@
 name = "Mutable-Dreams"
 id_prefix = "FM-1_710"
+smk_id_prefix = "7"   # SMK-37 Pro_7 + XXYYZZ: "SMK-37 Elite_" leaves 7 digits of the 20
 usb_manufacturer = "Mutable Dreams Project"
 usb_product = "Mutable Dreams FM-1"
 ble = false

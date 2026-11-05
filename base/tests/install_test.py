@@ -314,6 +314,32 @@ def from_open():
         I.STOCK_SHA256 = real
 
 
+def smk37():
+    """the M-Vave SMK-37's packages: on their own model only (Pro, Elite, MKE-P37), never on an FM-1 or the other way"""
+    pro, fm1 = package("SMK-37 Pro_300"), package()
+    p_pro, p_fm1 = pkgfile("smk.fwsc", pro), pkgfile("fm1.fwsc", fm1)
+    dev = FakeFM1(I.logical_image(pro), identity="SMK-37 Pro_016", name="SMK-37 PRO", after_write="SMK-37 Pro_300")
+    rc, out, err = cli([p_pro, "--yes"], dev)
+    ok(rc == 0 and dev.bad == 0 and "done: the FM-1 runs SMK-37 Pro_300" in out, "SMK-37: stock SMK-37 Pro -> the SMK package")
+    dev = FakeFM1(I.logical_image(pro), identity="ota-SMK-37 Pro_900", name="Felucca Update", after_write="SMK-37 Pro_300")
+    rc, out, err = cli([p_pro, "--yes"], dev)
+    ok(rc == 0 and dev.bad == 0 and dev.upgrades == 1, "SMK-37: in update mode -> finishes the write")
+    dev = FakeFM1(I.logical_image(fm1), identity="SMK-37 Pro_016", name="SMK-37 PRO")
+    rc, out, err = cli([p_fm1, "--yes"], dev)
+    ok(rc == 6 and dev.upgrades == 0, "SMK-37: an FM-1 package -> exit 6, nothing sent")
+    dev = FakeFM1(I.logical_image(fm1), identity="ota-SMK-37 Pro_900", name="Felucca Update")
+    rc, out, err = cli([p_fm1, "--yes"], dev)
+    ok(rc == 6 and dev.upgrades == 0, "SMK-37 in update mode: an FM-1 package -> exit 6, nothing written")
+    dev = FakeFM1(I.logical_image(pro), identity="SMK-37 Elite_016", name="SMK-37 Elite")
+    rc, out, err = cli([p_pro, "--yes"], dev)
+    ok(rc == 6 and dev.upgrades == 0, "SMK-37 Elite: an SMK-37 Pro package -> exit 6, nothing sent")
+    dev = FakeFM1(I.logical_image(pro))
+    rc, out, err = cli([p_pro, "--yes"], dev)
+    ok(rc == 6 and dev.upgrades == 0, "FM-1: an SMK-37 package -> exit 6, nothing sent")
+    rc, out, err = cli(["--info"], FakeFM1(I.logical_image(pro), identity="SMK-37 Pro_016", name="SMK-37 PRO"))
+    ok(rc == 0 and "SMK-37 Pro_016" in out, "--info finds an SMK-37 on its port name")
+
+
 def against_js():
     clean = ROOT / "template/build/template.fwsc"
     if not shutil.which("node") or not clean.exists():
@@ -333,6 +359,7 @@ wire()
 installs()
 errors()
 from_open()
+smk37()
 against_js()
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"INSTALL TESTS FAILED ({failed})" if failed else "install tests passed")

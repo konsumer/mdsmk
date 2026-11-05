@@ -63,6 +63,15 @@
  * app_host_fails() is added to the run's failures at its end (the app's own checks made along the way).
  * APP_HOST_MS: app_host_ms() every simulated millisecond, after the platform's (an app's own counters).
  * FM1B_SAID_LOG=FILE: a reader listens from boot, quietly, and every SAY is appended to FILE (the audit).
+ * The M-Vave SMK-37 (BOARD_SMK37, tools/build.py --board smk37 --host) adds (Copyright (C) 2026 M. Geisler
+ * (genkigenki/makkuro)):
+ *   press / release / tap KNOB_BANK | FADER_BANK | LEFT | RIGHT   its four buttons of its own
+ *   pad P down|up [VEL] | tappad P                                pad P (0..7 the top row, 8..15 the bottom row)
+ *   keybed K down|up | tapbed K                                    keybed key K (0 = C3 .. 36 = C6; 5..31 are F3..G5)
+ *   fader I V                    fader I (0..3) at V (0..127)
+ *   wheel pitch|mod V            the pitch wheel (-127..127, 0 at rest) or the mod wheel (0..127)
+ *   pads                         print the pads' colours (RRGGBB, the top row first) and the four buttons' LEDs
+ *   expect padN 0xRRGGBB | expect smk_leds N                       a pad's colour, the four LEDs (bits SB_*)
  */
 #define PLAT_HOST 1
 #ifndef FM1B_MIRROR
@@ -152,7 +161,61 @@ static uint32_t lit_btn, lit_keys, dim_btn, dim_keys;
 
 uint32_t plat_ms(void) { return now_ms; }
 uint32_t plat_buttons(void) { return held_btn | mirror_in_buttons(); }   /* (+ the host's: the mirror's remote) */
+#if BOARD_SMK37
+/* the SMK-37's pads, keybed, faders, wheels and their lights (plat.h), from the script */
+static uint32_t hsmk_sb, hsmk_led_lit, hsmk_pads_held, hsmk_pad_hit, hsmk_pad_rgb[SMK_NPADS];
+static uint64_t hsmk_bed, hsmk_bed_hit;
+static uint8_t hsmk_bed_vel[SMK_NKEYBED];   /* each key's last velocity ("keybed K down VEL", default 100) */
+static int hsmk_pedal = 1023;               /* the PEDAL jack ("pedal RAW"): an open jack reads high */
+static int hsmk_layout = SMK_PADS_PIANO, hsmk_pad_app, hsmk_fad[4] = {-1, -1, -1, -1}, hsmk_wh_new;
+static int32_t hsmk_wh_pitch, hsmk_wh_mod;
+static uint32_t hsmk_pad_white(uint32_t pads)    /* the pads as white keys, as the layout lays them out */
+{
+    uint32_t w, out = 0;
+    for (w = 0; w < 16u; w++)
+        if (pads >> (hsmk_layout == SMK_PADS_PIANO ? (w < 8u ? w + 8u : w - 8u) : w) & 1u)
+            out |= 1u << HOST_WHITE_K[w];
+    return out;
+}
+uint32_t plat_keys(void) { return held_keys | mirror_in_keys() | (hsmk_layout == SMK_PADS_OWN ? 0u : hsmk_pad_white(hsmk_pads_held)); }
+void plat_smk_pads(int layout) { hsmk_layout = layout; }
+uint32_t plat_smk_buttons(void) { return hsmk_sb; }
+void plat_smk_leds(uint32_t lit) { hsmk_led_lit = lit; }
+uint64_t plat_keybed(void) { return hsmk_bed; }
+int plat_keybed_vel(int k) { return k >= 0 && k < SMK_NKEYBED ? hsmk_bed_vel[k] : 0; }
+int plat_pedal_raw(void) { return hsmk_pedal; }
+uint64_t plat_keybed_hits(void)
+{
+    uint64_t h = hsmk_bed_hit;
+    hsmk_bed_hit = 0;
+    return h;
+}
+uint32_t plat_pad_hits(void)
+{
+    uint32_t h = hsmk_pad_hit;
+    hsmk_pad_hit = 0;
+    return hsmk_layout == SMK_PADS_OWN ? h : 0u;
+}
+uint32_t plat_pads_held(void) { return hsmk_pads_held; }
+int plat_fader(int i) { return i >= 0 && i < 4 ? hsmk_fad[i] : -1; }
+int plat_wheels(int32_t *pitch, int32_t *modw)
+{
+    if (!hsmk_wh_new)
+        return 0;
+    hsmk_wh_new = 0;
+    *pitch = hsmk_wh_pitch;
+    *modw = hsmk_wh_mod;
+    return 1;
+}
+void plat_pad_rgb(int pad, uint8_t r, uint8_t g, uint8_t b)
+{
+    if (pad >= 0 && pad < SMK_NPADS)
+        hsmk_pad_rgb[pad] = (uint32_t)r << 16 | (uint32_t)g << 8 | b;
+}
+void plat_pad_lights(int app) { hsmk_pad_app = app; }
+#else
 uint32_t plat_keys(void) { return held_keys | mirror_in_keys(); }
+#endif
 static uint32_t plat_remote_keys(void) { return 0; }   /* (the device's remote control: the script is this one's) */
 int32_t plat_enc(int role)
 {
@@ -373,7 +436,8 @@ const char *plat_wifi_why(void) { return ""; }
 const char *plat_wifi_ssid(void) { return wf_ssid; }
 uint32_t plat_wifi_ip(void) { return wf_st == WIFI_CONNECTED ? 0x2A01A8C0u : 0; }   /* 192.168.1.42 */
 int plat_wifi_rssi(void) { return wf_st == WIFI_CONNECTED ? -48 : 0; }
-int plat_wifi_scan(void) { return wf_st >= WIFI_ON ? 0 : -1; }
+static uint32_t wf_scans;                       /* scans asked (each one's results new, as on the device) */
+int plat_wifi_scan(void) { return wf_st >= WIFI_ON ? (wf_scans++, 0) : -1; }
 int plat_wifi_found(int i, char *ssid, int *rssi, int *secured)
 {
     static const char *const N[2] = {"Home", "Cafe"};
@@ -418,7 +482,7 @@ int plat_wifi_kept(const char *ssid)
             return 1;
     return 0;
 }
-uint32_t plat_wifi_scans(void) { return wf_st >= WIFI_ON ? 1u : 0u; }
+uint32_t plat_wifi_scans(void) { return wf_st >= WIFI_ON ? 1u + wf_scans : 0u; }
 void plat_wifi_rx(uint32_t *frames, int *rssi)
 {
     if (frames)
@@ -439,8 +503,14 @@ void plat_midi_out(uint32_t pkt) { plat_midi_send(pkt, TO_USB); }
 void plat_log(const char *line) { ble_say(line); }
 /* the data area and its two more windows (plat.h): a simulated flash from the first window to the last (the gap
  * between, the update's staging, refused as on the device), erased at the start, kept across a simulated reboot */
+#if BOARD_SMK37
+#define DATA_BASE PLAT_DATA_LO                  /* the SMK-37: the data area alone */
+#define DATA_TOP PLAT_DATA_HI
+#else
 #define DATA_BASE PLAT_XDATA0_LO
-static uint8_t data_area[PLAT_XDATA1_HI - DATA_BASE];
+#define DATA_TOP PLAT_XDATA1_HI
+#endif
+static uint8_t data_area[DATA_TOP - DATA_BASE];
 static uint8_t data_ready;
 static void data_init(void)
 {
@@ -1022,6 +1092,12 @@ static int expect(const char *what, const char *val)
         got = bdev_state;
     else if (!strcmp(what, "midi_in_usb"))          /* plat_midi_count: messages in from USB */
         got = (int)plat_midi_count(PORT_USB, 0);
+#if BOARD_SMK37
+    else if (!strncmp(what, "pad", 3) && what[3] >= '0' && what[3] <= '9' && atoi(what + 3) < SMK_NPADS)
+        got = (int)hsmk_pad_rgb[atoi(what + 3)];
+    else if (!strcmp(what, "smk_leds"))
+        got = (int)hsmk_led_lit;
+#endif
     else if (!strcmp(what, "peak_db_max") || !strcmp(what, "peak_db_min")) {
         double db = 20.0 * log10(peak_out > 1e-9f ? peak_out : 1e-9f);
         int bad = what[8] == 'm' && what[9] == 'a' ? db > atof(val) : db < atof(val);
@@ -1047,6 +1123,100 @@ static int expect(const char *what, const char *val)
     printf("  ok %s == %d\n", what, got);
     return 0;
 }
+
+#if BOARD_SMK37
+static void run_ms(uint32_t ms);
+/* the SMK-37's script commands (the header); 1 = handled */
+static int hsmk_cmd(const char *cmd, const char *a, const char *b, const char *c)
+{
+    static const char *const SB_N[NSB] = {"KNOB_BANK", "FADER_BANK", "LEFT", "RIGHT"};
+    int i;
+    if (!strcmp(cmd, "press") || !strcmp(cmd, "release") || !strcmp(cmd, "tap")) {
+        for (i = 0; i < NSB && strcmp(SB_N[i], a); i++)
+            ;
+        if (i == NSB)
+            return 0;
+        if (cmd[0] != 'r')
+            hsmk_sb |= 1u << i;
+        if (cmd[0] == 't')
+            run_ms(60);
+        if (cmd[0] != 'p')
+            hsmk_sb &= ~(1u << i);
+        run_ms(cmd[0] == 't' ? 40 : 2);
+        return 1;
+    }
+    if (!strcmp(cmd, "pad") || !strcmp(cmd, "tappad")) {
+        uint32_t p = (uint32_t)atoi(a), down = cmd[0] == 't' || !strcmp(b, "down");
+        if (p >= SMK_NPADS)
+            return 0;
+        if (down) {
+            hsmk_pads_held |= 1u << p;
+            hsmk_pad_hit |= 1u << p;
+        }
+        if (cmd[0] == 't')
+            run_ms(60);
+        if (cmd[0] == 't' || !strcmp(b, "up"))
+            hsmk_pads_held &= ~(1u << p);
+        return 1;
+    }
+    if (!strcmp(cmd, "keybed") || !strcmp(cmd, "tapbed")) {
+        uint32_t k = (uint32_t)atoi(a), down = cmd[0] == 't' || !strcmp(b, "down");
+        if (k >= SMK_NKEYBED)
+            return 0;
+        if (down) {
+            int v = atoi(cmd[0] == 't' ? b : c);      /* tapbed K [VEL], keybed K down [VEL] */
+            hsmk_bed_vel[k] = (uint8_t)(v > 0 && v < 128 ? v : 100);
+            hsmk_bed |= (uint64_t)1u << k;
+            hsmk_bed_hit |= (uint64_t)1u << k;
+            if (k >= 5u && k < 32u)
+                held_keys |= 1u << (k - 5u);
+        }
+        if (cmd[0] == 't')
+            run_ms(60);
+        if (cmd[0] == 't' || !strcmp(b, "up")) {
+            hsmk_bed &= ~((uint64_t)1u << k);
+            if (k >= 5u && k < 32u)
+                held_keys &= ~(1u << (k - 5u));
+        }
+        return 1;
+    }
+    if (!strcmp(cmd, "pedal")) {                 /* pedal RAW: the PEDAL jack's reading, 0..1023 */
+        hsmk_pedal = atoi(a) < 0 ? 0 : atoi(a) > 1023 ? 1023 : atoi(a);
+        return 1;
+    }
+    if (!strcmp(cmd, "fader")) {
+        i = atoi(a);
+        if (i < 0 || i > 3)
+            return 0;
+        if (hsmk_fad[i] < 0)                     /* (the device's first readings: where it rests) */
+            hsmk_fad[i] = atoi(b) ? 0 : 1, run_ms(20);
+        hsmk_fad[i] = atoi(b) < 0 ? 0 : atoi(b) > 127 ? 127 : atoi(b);
+        return 1;
+    }
+    if (!strcmp(cmd, "wheel")) {
+        if (!strcmp(a, "pitch"))
+            hsmk_wh_pitch = atoi(b);
+        else if (!strcmp(a, "mod"))
+            hsmk_wh_mod = atoi(b);
+        else
+            return 0;
+        hsmk_wh_new = 1;
+        return 1;
+    }
+    if (!strcmp(cmd, "pads")) {
+        printf("  pads:");
+        for (i = 0; i < SMK_NPADS; i++)
+            printf("%s%06X", i == 8 ? " |" : " ", (unsigned)hsmk_pad_rgb[i]);
+        printf("%s  leds:", hsmk_pad_app ? "" : " (the white keys)");
+        for (i = 0; i < NSB; i++)
+            if (hsmk_led_lit >> i & 1u)
+                printf(" %s", SB_N[i]);
+        printf("\n");
+        return 1;
+    }
+    return 0;
+}
+#endif
 
 #ifndef PLAT_WEB
 /* a file name of a script's: "out:NAME" is NAME in the output directory */
@@ -1201,6 +1371,10 @@ int main(int argc, char **argv)
             continue;
 #ifdef APP_HOST_CMD
         if (app_host_cmd(cmd, a, b, c, d))          /* the app's own commands (app.h) */
+            continue;
+#endif
+#if BOARD_SMK37
+        if (hsmk_cmd(cmd, a, b, c))                  /* the SMK-37's own buttons, pads, keybed, faders, wheels */
             continue;
 #endif
         if (!strcmp(cmd, "wait"))

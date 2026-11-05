@@ -5,14 +5,31 @@
  * the SysEx protocol (pack7, cmd 0x30 reads, 0xE0000000 -> "success") and a
  * simulated NOR plays the flash.
  *   cc -o ota_test tests/ota_test.c && ./ota_test FILE.fwsc
+ * The M-Vave SMK-37's build of ota.c (cc -DBOARD_SMK37=1 [-DSMK_MODEL='"SMK-37 Elite"']): its staging 0xBB000, its
+ * record 0xBFF00 with the model's loader identity, and another board's package (OTHER.fwsc) refused untouched:
+ *   ./ota_test SMK.fwsc [FM1.fwsc]
  */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define FELUCCA_ID "FM-1_900"
 #define FELUCCA_OTA_DRYRUN 0
+#if defined(BOARD_SMK37) && BOARD_SMK37
+#ifndef SMK_MODEL
+#define SMK_MODEL "SMK-37 Pro"
+#endif
+#define FELUCCA_ID SMK_MODEL "_900"
+#define T_AREA 0xBB000u                          /* the staging and its record (ota.c) */
+#define T_RES 0xBFF00u
+#define T_PARM "ota-" SMK_MODEL "_016"
+#else
+#define FELUCCA_ID "FM-1_900"
+#define T_AREA 0xE0000u
+#define T_RES 0xE4F00u
+#define T_PARM "ota-FM-1_015"
+#endif
+#define T_END (T_AREA + 0x5000u)
 
 static uint8_t nor[0x100000];
 static uint8_t *logical;
@@ -97,7 +114,7 @@ static uint32_t ota_now_ms(void) { return now_ms; }
 static void ota_idle(void) { now_ms += 1; }
 static int ota_erase(uint32_t off)
 {
-    if (off < 0xE0000u || off >= 0xE5000u || (off & 0xFFFu)) { bad_erase++; return -8; }
+    if (off < T_AREA || off >= T_END || (off & 0xFFFu)) { bad_erase++; return -8; }
     memset(nor + off, 0xFF, 4096);
     return 0;
 }
@@ -105,7 +122,7 @@ static int ota_prog(uint32_t off, const void *src, uint32_t n)
 {
     const uint8_t *s = src;
     uint32_t i;
-    if (off < 0xE0000u || off + n > 0xE5000u) { bad_erase++; return -8; }
+    if (off < T_AREA || off + n > T_END) { bad_erase++; return -8; }
     for (i = 0; i < n; i++) nor[off + i] &= s[i];
     return 0;
 }
@@ -139,8 +156,25 @@ static int check(const char *what, int ok)
 static int area_erased(void)
 {
     uint32_t i;
-    for (i = 0xE0000; i < 0xE5000; i++) if (nor[i] != 0xFF) return 0;
+    for (i = T_AREA; i < T_END; i++) if (nor[i] != 0xFF) return 0;
     return 1;
+}
+
+static uint8_t *load_pkg(const char *path, size_t *len)   /* a .fwsc's logical image (the marker bytes dropped) */
+{
+    FILE *f = fopen(path, "rb");
+    uint8_t *raw, *l;
+    size_t n, i;
+    if (!f) { perror(path); exit(2); }
+    raw = malloc(0x200000);
+    n = fread(raw, 1, 0x200000, f);
+    fclose(f);
+    l = malloc(n);
+    for (i = 0; i < 20; i++) memcpy(l + i * 47, raw + i * 48, 47);
+    memcpy(l + 20 * 47, raw + 20 * 48, n - 20 * 48);
+    *len = n - 20;
+    free(raw);
+    return l;
 }
 
 static void reset_dev(void)
@@ -186,15 +220,16 @@ int main(int argc, char **argv)
     bad += check("session commits", rc == 0 && committed);
     bad += check("headers + loader + confirm, no head reads", requests >= 10 && requests <= 30);
     {
-        uint8_t *h = nor + 0xE0000, *p = committed_parm;
-        bad += check("staged body == the package's loader", !memcmp(nor + 0xE0020, logical + ota_body_off(), 64));
+        uint8_t *h = nor + T_AREA, *p = committed_parm;
+        bad += check("staged body == the package's loader", !memcmp(nor + T_AREA + 0x20u, logical + ota_body_off(), 64));
         bad += check("LOADER.BIN head CRC",
                      (h[0] | h[1] << 8) == ota_crc16(h + 2, 30, 0) && !memcmp(h + 16, "LOADER.BIN", 10));
-        bad += check("record at 0xE4F00 == RAM record", !memcmp(nor + 0xE4F00, p, 112));
+        bad += check("record at the area's end - 256 == RAM record", !memcmp(nor + T_RES, p, 112));
         bad += check("record CRC / type / magic / ota_addr",
                      (p[0] | p[1] << 8) == ota_crc16(p + 2, 78, 0) && (p[2] | p[3] << 8) == 0x5A0D &&
-                     (p[6] | p[7] << 8) == 0x5441 && ota_rd32(p + 72) == 0xE0000);
-        bad += check("nothing written outside 0xE0000..0xE4FFF", bad_erase == 0);
+                     (p[6] | p[7] << 8) == 0x5441 && ota_rd32(p + 72) == T_AREA);
+        bad += check("record identity " T_PARM, !memcmp(p + 8, T_PARM, sizeof T_PARM - 1) && p[8 + sizeof T_PARM - 1] == 0);
+        bad += check("nothing written outside the staging area", bad_erase == 0);
     }
     /* boot cleanup erases it */
     bad += check("boot cleanup erases the area", ota_boot_cleanup() == 1 && area_erased());
@@ -219,6 +254,16 @@ int main(int argc, char **argv)
         bad += check("no 'success' -> -13, no commit, area clean", rc == -13 && !committed && area_erased());
     }
 
+#if defined(BOARD_SMK37) && BOARD_SMK37
+    if (argc > 2) {                                        /* another board's package: refused, nothing written */
+        logical = load_pkg(argv[2], &logical_len);
+        reset_dev();
+        memcpy(nor, load_pkg(argv[1], &n) + 0x400, 0x4000);   /* (the device's own head) */
+        rc = ota_session();
+        bad += check("another board's package refused (-15), nothing staged", rc == -15 && !committed && area_erased() &&
+                     bad_erase == 0);
+    }
+#endif
     printf("%s\n", bad ? "OTA TEST FAILED" : "ota test passed");
     return bad != 0;
 }
