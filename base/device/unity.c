@@ -21,7 +21,10 @@
  *   APP_TOUCH               velocity and pressure from the keys (lib/touch.h)
  *   FM1B_BLE 0              Bluetooth MIDI (fm1.toml ble = true; tools/build.py --no-ble leaves it out)
  *   FM1B_MIRROR 0           the screen and panel mirrored over USB (fm1.toml mirror = true: mirror.c)
- *   FM1B_BACKUP 0           backup and restore of the app's objects over USB (fm1.toml backup = true: backup.c) */
+ *   FM1B_BACKUP 0           backup and restore of the app's objects over USB (fm1.toml backup = true: backup.c)
+ * BOARD_SMK37 1 (tools/build.py BOARD=smk37) builds it for the M-Vave SMK-37: felucca-bsp's boards/smk37 is on the
+ * include path in place of boards/fm1 (the same header names), and the platform's few board-specific places are
+ * marked BOARD_SMK37 (the panel, the lights, the store's place, the flash part). */
 #include <stdint.h>
 #include "plat.h"
 #include "app.h"                  /* first: the scan's hooks below may call the app */
@@ -89,6 +92,13 @@ static volatile uint32_t fm1_ms;  /* milliseconds since boot (TIMER4-based, TIME
 #define FELUCCA_MIRROR FM1B_MIRROR /* usb.c's ring for mirror.c's frames */
 #define SXQ 128u                  /* the SysEx send ring, in packets: a whole screen-reader SAY (ANN_MAX + 9 bytes) */
 #include "usb.c"
+#if BOARD_SMK37 && !defined(FM1B_TRS)
+#define FM1B_TRS 0                /* the SMK-37's TRS jack is MIDI OUT (UART1 TX, PC7), and PH8, the FM-1's MIDI IN pin,
+                                   * is a key-matrix row there: it must never become UART RX */
+#endif
+#if BOARD_SMK37 && FM1B_TRS
+#error "BOARD_SMK37: midi_uart.c is the FM-1's MIDI IN (RX on PH8, a key-matrix row on the SMK-37)"
+#endif
 #ifndef FM1B_TRS
 #define FM1B_TRS 1
 #endif
@@ -127,6 +137,15 @@ static int st_prog(uint32_t off, const void *src, uint32_t n)
         return -8;
     return fl_write(off, src, n);
 }
+#if BOARD_SMK37
+static int st_erase_stocktag(void)              /* the stock firmware's USRFLASH end marker: erased, never written */
+{
+    uint32_t took;
+    audio_silence();
+    return fl_erase4k(FL_STOCKTAG_LO, &took);
+}
+#define ST_IDLE() fm1_wdt_feed()  /* (storage.c: between the erases of a store take-over) */
+#endif
 #include "storage.c"
 
 struct bootguard_s { uint32_t magic, failed, pending; };

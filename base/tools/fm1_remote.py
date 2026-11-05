@@ -43,11 +43,11 @@ def nibbles(text):
 
 class FM1:
     def __init__(self):
-        names = [n for n in mido.get_output_names() if "FM-1" in n]
+        names = [n for n in mido.get_output_names() if "FM-1" in n or "SMK-37" in n]   # (an M-Vave SMK-37 build too)
         if not names:
             raise SystemExit("no FM-1 on USB-MIDI")
         self.out = mido.open_output(names[0])
-        self.inp = mido.open_input([n for n in mido.get_input_names() if "FM-1" in n][0])
+        self.inp = mido.open_input([n for n in mido.get_input_names() if "FM-1" in n or "SMK-37" in n][0])
         self.btn = self.keys = 0
         self.listening = False
 

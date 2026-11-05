@@ -132,7 +132,15 @@ void plat_log(const char *line);
  * write stops everything for a moment (the sound too: no flash reads meanwhile).
  * Two more windows for big data, outside the store: PLAT_XDATA0 (16 KiB, just above the app area) and PLAT_XDATA1
  * (92 KiB, above the update's staging). The update loader clears an update record it finds in the last 256 bytes of
- * a sector there, so in these two an app keeps bytes 0xF00..0xF07 of every sector erased (0xFF) */
+ * a sector there, so in these two an app keeps bytes 0xF00..0xF07 of every sector erased (0xFF).
+ * The M-Vave SMK-37 (BOARD_SMK37): 0xC2000..0xE9FFF (160 KiB, the stock USRFLASH), the data area alone (the store's
+ * objects are elsewhere, boards/smk37/fm1_flash_map.h; the XDATA windows are its app area and stock resources); the
+ * first erase or write there releases the stock firmware's mapping (it rebuilds its factory one at its next start) */
+#if defined(BOARD_SMK37) && BOARD_SMK37
+#define PLAT_DATA_LO 0xC2000u
+#define PLAT_DATA_HI 0xEA000u
+#define PLAT_DATA_OK(off, n) plat_in((off), (n), PLAT_DATA_LO, PLAT_DATA_HI)
+#else
 #define PLAT_DATA_LO 0x97000u
 #define PLAT_DATA_HI 0xE0000u
 #define PLAT_XDATA0_LO 0x93000u
@@ -142,6 +150,7 @@ void plat_log(const char *line);
 #define PLAT_DATA_OK(off, n) (plat_in((off), (n), PLAT_DATA_LO, PLAT_DATA_HI) || \
                               plat_in((off), (n), PLAT_XDATA0_LO, PLAT_XDATA0_HI) || \
                               plat_in((off), (n), PLAT_XDATA1_LO, PLAT_XDATA1_HI))
+#endif
 static inline int plat_in(uint32_t off, uint32_t n, uint32_t lo, uint32_t hi)   /* [off, off + n) in [lo, hi) */
 {
     return off >= lo && off <= hi && n <= hi - off;
@@ -167,6 +176,34 @@ void plat_usb_audio_full(int on);
  * hands each reading to the app (app_key_sample, app_key_probe); off by default */
 void plat_sense(int on);
 uint32_t plat_analog_mask(void);       /* bit k: key k is on an analog row (PA7 / PA8; the top row is probed) */
+
+#if defined(BOARD_SMK37) && BOARD_SMK37
+/* The M-Vave SMK-37 (BOARD_SMK37): its controls beyond the FM-1's. plat_buttons and plat_enc are the FM-1's by name
+ * (the panel map: SCALE = SEL, CHORD = ENV, NOTE REPEAT = LFO, PARA = EDIT, GLOBE = GLO, PATCH = HOME, BT = SAVE,
+ * SEQ PLAY = PLAY, SEQ REC = REC; K1..K4 = KNOB 1..4, K5 = MASTER (plat_master), K6..K8 = SELECT, ALGORITHM, PRESETS).
+ * plat_keys is the keybed's F3..G5 (the FM-1's 27 keys) and the 16 pads as its 16 white keys (plat_smk_pads). Pads are
+ * numbered as the hardware: 0..7 the top row, 8..15 the bottom row, left to right. */
+#define SMK_NKEYBED 37                 /* C3 .. C6 */
+#define SMK_NPADS 16
+enum { SB_KNOB_BANK, SB_FADER_BANK, SB_LEFT, SB_RIGHT, NSB };   /* the four buttons the FM-1 has not */
+/* the pads' layout: PIANO the white keys F3..G5, low notes on the bottom row (the default); GRID the white keys in
+ * reading order (the top row white keys 1-8); OWN not keys at all (plat_pad_hits) */
+enum { SMK_PADS_PIANO, SMK_PADS_GRID, SMK_PADS_OWN };
+void plat_smk_pads(int layout);        /* a pad held keeps the key it pressed until it is let go */
+uint32_t plat_smk_buttons(void);       /* held: bit SB_* */
+void plat_smk_leds(uint32_t lit);      /* their LEDs, bit SB_* (before plat_lights / plat_leds) */
+uint64_t plat_keybed(void);            /* keybed keys held: bit k = key k (0 = C3) */
+uint64_t plat_keybed_hits(void);       /* keybed presses since the last call */
+int plat_keybed_vel(int k);            /* key k's last press: its velocity 1..127 (the factory curves); 0 = none yet */
+int plat_pedal_raw(void);              /* the PEDAL jack: the raw reading 0..1023 (polarity is the pedal's), -1 none */
+uint32_t plat_pad_hits(void);          /* SMK_PADS_OWN: pad presses since the last call, bit p = pad p */
+uint32_t plat_pads_held(void);         /* pads held, bit p = pad p (any layout) */
+int plat_fader(int i);                 /* fader 0..3: 0..127, -1 while the readings settle */
+int plat_wheels(int32_t *pitch, int32_t *modw);   /* 1 = new values: pitch -127..127 (0 at rest), mod 0..127 */
+void plat_pad_rgb(int pad, uint8_t r, uint8_t g, uint8_t b);   /* pad p's light (with plat_pad_lights(1)) */
+void plat_pad_lights(int app);         /* 1: the app colours the pads (plat_pad_rgb); 0 (default): plat_lights shows
+                                        * the white keys on them (lit light blue, dim dark orange) */
+#endif
 
 /* persistent storage (Felucca storage.c objects: A/B sectors, CRC, torn-write safe) */
 int plat_store_load(uint32_t obj, void *dst, uint32_t max);   /* bytes loaded, < 0 = none / bad (an empty object is
